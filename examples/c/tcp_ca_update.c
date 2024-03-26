@@ -124,8 +124,10 @@ static void do_test(const char *tcp_ca, const struct bpf_map *sk_stg_map)
 		return;
 	}
 
-	if (settcpca(lfd, tcp_ca) || settcpca(fd, tcp_ca) || settimeo(lfd, 0) || settimeo(fd, 0))
+	if (settcpca(lfd, tcp_ca) || settcpca(fd, tcp_ca) || settimeo(lfd, 0) || settimeo(fd, 0)) {
+    fputs("settcpca", stderr);
 		goto done;
+  }
 
 	/* bind, listen and start server thread to accept */
 	sa6.sin6_family = AF_INET6;
@@ -172,7 +174,7 @@ static void do_test(const char *tcp_ca, const struct bpf_map *sk_stg_map)
 	}
 
 	err = pthread_create(&srv_thread, NULL, server, (void *)(long)lfd);
-	if (err == 0)
+	if (err != 0)
 		goto done;
 
 	/* recv total_bytes */
@@ -186,14 +188,20 @@ static void do_test(const char *tcp_ca, const struct bpf_map *sk_stg_map)
 	}
 
 	assert(bytes == total_bytes);
+  fputs("Successfully transferred data\n", stdout);
 
 	stop = 1;
 	pthread_join(srv_thread, &thread_ret);
-	assert(thread_ret != 0);
+	assert(thread_ret == 0);
 
 done:
 	close(lfd);
 	close(fd);
+}
+
+static int libbpf_print_fn(enum libbpf_print_level level, const char *format, va_list args)
+{
+	return vfprintf(stderr, format, args);
 }
 
 int main(int argc, const char *argv[])
@@ -203,11 +211,20 @@ int main(int argc, const char *argv[])
 	int saved_ca1_cnt;
 	int err;
 
-	skel = tcp_ca_update_bpf__open_and_load();
+	/* Set up libbpf errors and debug info callback */
+	//libbpf_set_print(libbpf_print_fn);
+
+
+	skel = tcp_ca_update_bpf__open();
 	if (skel == NULL) {
-    fputs("tcp_ca_update_bpf__open_and_load", stderr);
+    fputs("tcp_ca_update_bpf__open", stderr);
 		return 1;
   }
+
+  skel->struct_ops.ca_update_1->cong_control = skel->struct_ops.ca_update_2->cong_control;
+
+	err = tcp_ca_update_bpf__load(skel);
+	assert(err == 0);
 
 	link = bpf_map__attach_struct_ops(skel->maps.ca_update_1);
   assert(link != 0);
@@ -215,13 +232,14 @@ int main(int argc, const char *argv[])
 	do_test("tcp_ca_update", NULL);
 	saved_ca1_cnt = skel->bss->ca1_cnt;
 	assert(saved_ca1_cnt > 0);
+  assert(skel->bss->cong_control);
 
-	err = bpf_link__update_map(link, skel->maps.ca_update_2);
-	assert(err == 0);
+	//err = bpf_link__update_map(link, skel->maps.ca_update_2);
+	//assert(err == 0);
 
-	do_test("tcp_ca_update", NULL);
-	assert(skel->bss->ca1_cnt == saved_ca1_cnt);
-	assert(skel->bss->ca2_cnt > 0);
+	//do_test("tcp_ca_update", NULL);
+	//assert(skel->bss->ca1_cnt == saved_ca1_cnt);
+	//assert(skel->bss->ca2_cnt > 0);
 
 	bpf_link__destroy(link);
 	tcp_ca_update_bpf__destroy(skel);

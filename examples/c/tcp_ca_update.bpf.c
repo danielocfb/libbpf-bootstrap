@@ -9,6 +9,7 @@ char _license[] SEC("license") = "GPL";
 
 int ca1_cnt = 0;
 int ca2_cnt = 0;
+bool cong_control = false;
 
 static inline struct tcp_sock *tcp_sk(const struct sock *sk)
 {
@@ -31,6 +32,13 @@ SEC("struct_ops/ca_update_cong_control")
 void BPF_PROG(ca_update_cong_control, struct sock *sk,
 	      const struct rate_sample *rs)
 {
+}
+
+SEC("struct_ops/ca_update_cong_control")
+void BPF_PROG(ca_update_cong_control2, struct sock *sk,
+	      const struct rate_sample *rs)
+{
+  cong_control = true;
 }
 
 SEC("struct_ops/ca_update_ssthresh")
@@ -57,7 +65,7 @@ struct tcp_congestion_ops ca_update_1 = {
 SEC(".struct_ops.link")
 struct tcp_congestion_ops ca_update_2 = {
 	.init = (void *)ca_update_2_init,
-	.cong_control = (void *)ca_update_cong_control,
+	.cong_control = (void *)ca_update_cong_control2,
 	.ssthresh = (void *)ca_update_ssthresh,
 	.undo_cwnd = (void *)ca_update_undo_cwnd,
 	.name = "tcp_ca_update",

@@ -170,7 +170,11 @@ fn show_stack_trace(stack: &[u64], symbolizer: &symbolize::Symbolizer, pid: u32)
     }
 }
 
-fn event_handler(symbolizer: &symbolize::Symbolizer, data: &[u8]) -> ::std::os::raw::c_int {
+fn adjust_stack_addrs(stack: &mut [blazesym::Addr]) {
+    let () = stack.iter_mut().skip(1).for_each(|addr| *addr -= 1);
+}
+
+fn event_handler(symbolizer: &symbolize::Symbolizer, data: &mut [u8]) -> ::std::os::raw::c_int {
     if data.len() != mem::size_of::<stacktrace_event>() {
         eprintln!(
             "Invalid size {} != {}",
@@ -180,7 +184,7 @@ fn event_handler(symbolizer: &symbolize::Symbolizer, data: &[u8]) -> ::std::os::
         return 1;
     }
 
-    let event = unsafe { &*(data.as_ptr() as *const stacktrace_event) };
+    let event = unsafe { &mut *(data.as_mut_ptr() as *mut stacktrace_event) };
 
     if event.kstack_size <= 0 && event.ustack_size <= 0 {
         return 1;
@@ -190,9 +194,12 @@ fn event_handler(symbolizer: &symbolize::Symbolizer, data: &[u8]) -> ::std::os::
     println!("COMM: {} (pid={}) @ CPU {}", comm, event.pid, event.cpu_id);
 
     if event.kstack_size > 0 {
+        let stack = &mut event.kstack[0..(event.kstack_size as usize / mem::size_of::<u64>())];
+        adjust_stack_addrs(stack);
+
         println!("Kernel:");
         show_stack_trace(
-            &event.kstack[0..(event.kstack_size as usize / mem::size_of::<u64>())],
+            stack,
             symbolizer,
             0,
         );
@@ -201,9 +208,11 @@ fn event_handler(symbolizer: &symbolize::Symbolizer, data: &[u8]) -> ::std::os::
     }
 
     if event.ustack_size > 0 {
+        let stack = &mut event.ustack[0..(event.ustack_size as usize / mem::size_of::<u64>())];
+        adjust_stack_addrs(stack);
         println!("Userspace:");
         show_stack_trace(
-            &event.ustack[0..(event.ustack_size as usize / mem::size_of::<u64>())],
+            &stack,
             symbolizer,
             event.pid,
         );

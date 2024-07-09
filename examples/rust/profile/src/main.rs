@@ -1,5 +1,9 @@
+use std::ffi::c_ulong;
+use std::fs::File;
 use std::io;
+use std::io::ErrorKind;
 use std::mem;
+use std::os::fd::AsRawFd as _;
 use std::time::Duration;
 
 use blazesym::symbolize;
@@ -225,6 +229,38 @@ struct Args {
     verbosity: u8,
 }
 
+/// Checker whether the program is running in a PID namespace.
+fn is_in_pid_ns() -> libbpf_rs::Result<bool> {
+    // See ioctl_ns(2) for details.
+    const NS_GET_PARENT: c_ulong = 0xb701; // _IO(NSIO, 0x2) from linux/nsfs.h
+
+    let pid_ns = match File::open("/proc/self/ns/pid") {
+        Ok(file) => file,
+        Err(err) if err.kind() == ErrorKind::NotFound => {
+            println!("NOT FOUND");
+            // Without the file we can't do anything, but assume good intent.
+            return Ok(false);
+        }
+        Err(err) => return Err(err).context("failed to open `/proc/self/ns/pid`"),
+    };
+
+    let rc = unsafe { libc::ioctl(pid_ns.as_raw_fd(), NS_GET_PARENT) };
+    if rc < 0 {
+        let err = io::Error::last_os_error();
+        println!("err = {err:?}");
+        match err.raw_os_error() {
+            Some(libc::EINVAL) => {
+                Ok(false)
+            },
+            Some(libc::EPERM) => Ok(true),
+            _ => Err(err).context("failed to retrieve PID namespace parent"),
+        }
+    } else {
+        println!("rc = {rc}");
+        Ok(true)
+    }
+}
+
 fn main() -> Result<(), libbpf_rs::Error> {
     let args = Args::parse();
     let level = match args.verbosity {
@@ -240,6 +276,15 @@ fn main() -> Result<(), libbpf_rs::Error> {
         .with_timer(SystemTime)
         .finish();
     let () = set_global_subscriber(subscriber).expect("failed to set tracing subscriber");
+
+    if is_in_pid_ns()? {
+        return Err(io::Error::new(
+            ErrorKind::Unsupported,
+            "profiler is system-wide and is not meant to be used in a PID namespace",
+        )
+        .into());
+    }
+    println!("NOT IN PID NS");
 
     let freq = if args.freq < 1 { 1 } else { args.freq };
 
